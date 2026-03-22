@@ -147,6 +147,9 @@ These options are related to subset configuration.
 | `caption_suffix` | `", from side"` | o | o | o |
 | `caption_separator` |  (not specified) | o | o | o |
 | `keep_tokens_separator` | `“|||”` | o | o | o |
+| `caption_mode` | `"mixed"` | o | o | o |
+| `mixed_weights` | `{ tags = 50, nl = 10, tags_nl = 20, nl_tags = 20 }` | o | o | o |
+| `protected_tags_file` | `"./protected_tags.txt"` | o | o | o |
 | `secondary_separator` | `“;;;”` | o | o | o |
 | `enable_wildcard` | `true` | o | o | o |
 | `resize_interpolation` | (not specified) | o | o | o |
@@ -159,6 +162,12 @@ These options are related to subset configuration.
     * Specifies the string to separate the tags. The default is `,`. This option is usually not necessary to set.
 * `keep_tokens_separator`
     * Specifies the string to separate the parts to be fixed in the caption. For example, if you specify `aaa, bbb ||| ccc, ddd, eee, fff ||| ggg, hhh`, the parts `aaa, bbb` and `ggg, hhh` will remain, and the rest will be shuffled and dropped. The comma in between is not necessary. As a result, the prompt will be `aaa, bbb, eee, ccc, fff, ggg, hhh` or `aaa, bbb, fff, ccc, eee, ggg, hhh`, etc.
+* `caption_mode`
+    * `caption` uses the normal caption file only. `mixed` uses the normal caption file as the tag caption and also loads a companion natural-language caption file with `_nl` added before the extension, such as `image.txt` + `image_nl.txt`.
+* `mixed_weights`
+    * Used when `caption_mode = "mixed"`. It chooses between `tags`, `nl`, `tags_nl`, and `nl_tags` using the specified weights. The natural-language part is not affected by tag dropout, and tags before `keep_tokens_separator` always stay at the beginning.
+* `protected_tags_file`
+    * Specifies a text file containing one tag per line. Tags in this file are protected from `caption_tag_dropout_rate`, but they are still included in caption shuffling. Matching is case-insensitive.
 * `secondary_separator`
     * Specifies an additional separator. The part separated by this separator is treated as one tag and is shuffled and dropped. It is then replaced by `caption_separator`. For example, if you specify `aaa;;;bbb;;;ccc`, it will be replaced by `aaa,bbb,ccc` or dropped together.
 * `enable_wildcard`
@@ -343,6 +352,7 @@ caption_extension = ".txt"
 keep_tokens_separator= "|||"
 shuffle_caption = true
 caption_tag_dropout_rate = 0.1
+protected_tags_file = "./protected_tags.txt"
 secondary_separator = ";;;" # subset 側に書くこともできます / can be written in the subset side
 enable_wildcard = true # 同上 / same as above
 
@@ -365,6 +375,18 @@ enable_wildcard = true # 同上 / same as above
 ```
 The part `sky;;;cloud;;;day` is replaced with `sky,cloud,day` without shuffling or dropping. When shuffling and dropping are enabled, it is processed as a whole (as one tag). For example, it becomes `vocaloid, 1girl, upper body, sky,cloud,day, outdoors, hatsune miku` (shuffled) or `vocaloid, 1girl, outdoors, looking at viewer, upper body, hatsune miku` (dropped).
 
+### Example of `protected_tags_file`
+
+If `protected_tags.txt` contains:
+
+```txt
+apple
+banana
+loov
+```
+
+then those tags are still shuffled with the rest of the caption, but they are never removed by `caption_tag_dropout_rate`.
+
 ### Example of caption, enable_wildcard notation: `enable_wildcard = true`
 
 ```txt
@@ -383,4 +405,3 @@ If you want to include `{` or `}` in the tag string, double them like `{{` or `}
 1girl, hatsune miku, vocaloid ||| stage, microphone, white shirt, smile ||| best quality, rating: general
 ```
 It becomes `1girl, hatsune miku, vocaloid, microphone, stage, white shirt, best quality, rating: general` or `1girl, hatsune miku, vocaloid, white shirt, smile, stage, microphone, best quality, rating: general` etc.
-
