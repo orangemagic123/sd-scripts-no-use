@@ -1,6 +1,9 @@
 import argparse
+import json
 import random
 import sys
+import textwrap
+import tempfile
 import types
 from importlib.machinery import ModuleSpec
 from pathlib import Path
@@ -243,7 +246,7 @@ def test_apply_top_level_dataset_fallbacks_sets_mixed_weights_only_when_dataset_
 
 
 def test_training_scripts_prepare_accelerator_before_mixed_weight_mismatch_logging():
-    for script_path in ["train_network.py", "train_db.py", "fine_tune.py"]:
+    for script_path in ["train_network.py", "train_db.py", "fine_tune.py", "anima_train.py"]:
         script = Path(script_path).read_text(encoding="utf-8")
         prepare_index = script.index("prepare_accelerator(args)")
         assert prepare_index >= 0
@@ -260,6 +263,44 @@ def test_training_scripts_prepare_accelerator_before_mixed_weight_mismatch_loggi
 
         assert mismatch_log_indices
         assert min(mismatch_log_indices) > prepare_index
+
+
+def test_anima_train_applies_top_level_dataset_fallbacks_for_dataset_config():
+    script = Path("anima_train.py").read_text(encoding="utf-8")
+
+    train_fallback_call = "config_util.apply_top_level_dataset_fallbacks(user_config, args, train_dataset_group)"
+    val_fallback_call = "config_util.apply_top_level_dataset_fallbacks(user_config, args, val_dataset_group)"
+
+    assert train_fallback_call in script
+    assert val_fallback_call in script
+
+
+def test_read_config_from_file_preserves_top_level_mixed_weights_inline_table():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--config_file", default=None)
+    parser.add_argument("--output_config", action="store_true")
+    parser.add_argument("--mixed_weights", type=json.loads, default=None)
+    parser.add_argument("--caption_mode", type=str, default="caption")
+
+    with tempfile.NamedTemporaryFile("w", suffix=".toml", delete=False) as tmp:
+        tmp.write(
+            textwrap.dedent(
+                """
+                mixed_weights = { tags = 25, nl = 25, tags_nl = 25, nl_tags = 25 }
+                caption_mode = "mixed"
+                """
+            )
+        )
+        config_path = tmp.name
+
+    try:
+        args = parser.parse_args(["--config_file", config_path])
+        args = train_util.read_config_from_file(args, parser)
+    finally:
+        Path(config_path).unlink()
+
+    assert args.caption_mode == "mixed"
+    assert args.mixed_weights == {"tags": 25, "nl": 25, "tags_nl": 25, "nl_tags": 25}
 
 
 def test_mixed_caption_nl_tags_keeps_fixed_prefix_first():
