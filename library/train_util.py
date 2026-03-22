@@ -827,6 +827,8 @@ class BaseDataset(torch.utils.data.Dataset):
         frequency_for_dir = self.tag_frequency.get(dir_name, {})
         self.tag_frequency[dir_name] = frequency_for_dir
         for caption in captions:
+            if isinstance(caption, dict):
+                caption = caption.get("tags", "")
             for tag in caption.split(","):
                 tag = tag.strip()
                 if tag:
@@ -870,30 +872,8 @@ class BaseDataset(torch.utils.data.Dataset):
             caption = ""
             caption_info["is_caption_dropout"] = True
         else:
-            # process wildcards
-            if subset.enable_wildcard:
-                # if caption is multiline, random choice one line
-                if "\n" in caption:
-                    caption = random.choice(caption.split("\n"))
-
-                # wildcard is like '{aaa|bbb|ccc...}'
-                # escape the curly braces like {{ or }}
-                replacer1 = "⦅"
-                replacer2 = "⦆"
-                while replacer1 in caption or replacer2 in caption:
-                    replacer1 += "⦅"
-                    replacer2 += "⦆"
-
-                caption = caption.replace("{{", replacer1).replace("}}", replacer2)
-
-                # replace the wildcard
-                def replace_wildcard(match):
-                    return random.choice(match.group(1).split("|"))
-
-                caption = re.sub(r"\{([^}]+)\}", replace_wildcard, caption)
-
-                # unescape the curly braces
-                caption = caption.replace(replacer1, "{").replace(replacer2, "}")
+            if isinstance(caption, dict) and subset.caption_mode == "mixed":
+                caption = self._build_mixed_caption(subset, caption, caption_info)
             else:
                 # if caption is multiline, use the first line
                 caption = caption.split("\n")[0]
@@ -966,7 +946,10 @@ class BaseDataset(torch.utils.data.Dataset):
                     else:
                         caption = str_to
                 else:
-                    caption = caption.replace(str_from, str_to)
+                    caption_info["log_segments"] = [tag.strip() for tag in caption.split(subset.caption_separator) if tag.strip()]
+
+                if subset.secondary_separator:
+                    caption = caption.replace(subset.secondary_separator, subset.caption_separator)
 
         caption_info["processed_caption"] = caption
 
@@ -1148,6 +1131,7 @@ class BaseDataset(torch.utils.data.Dataset):
                 not (
                     subset.caption_dropout_rate > 0 and not cache_supports_dropout
                     or subset.shuffle_caption
+                    or subset.caption_mode == "mixed"
                     or subset.token_warmup_step > 0
                     or subset.caption_tag_dropout_rate > 0
                 )
@@ -1997,15 +1981,15 @@ class DreamBoothDataset(BaseDataset):
             self.bucket_reso_steps = None  # この情報は使われない
             self.bucket_no_upscale = False
 
-        def read_caption(img_path, caption_extension, enable_wildcard):
-            # captionの候補ファイル名を作る
+        def build_caption_paths(img_path, caption_extension, suffix: str = ""):
             base_name = os.path.splitext(img_path)[0]
             base_name_face_det = base_name
             tokens = base_name.split("_")
             if len(tokens) >= 5:
                 base_name_face_det = "_".join(tokens[:-4])
-            cap_paths = [base_name + caption_extension, base_name_face_det + caption_extension]
+            return [base_name + suffix + caption_extension, base_name_face_det + suffix + caption_extension]
 
+        def read_caption_file(cap_paths, enable_wildcard):
             caption = None
             for cap_path in cap_paths:
                 if os.path.isfile(cap_path):
@@ -2023,6 +2007,17 @@ class DreamBoothDataset(BaseDataset):
                     break
             return caption
 
+        def read_caption(img_path, caption_extension, enable_wildcard, caption_mode):
+            tags_caption = read_caption_file(build_caption_paths(img_path, caption_extension), enable_wildcard)
+            if caption_mode != "mixed":
+                return tags_caption
+
+            nl_caption = read_caption_file(build_caption_paths(img_path, caption_extension, "_nl"), enable_wildcard)
+            if tags_caption is None and nl_caption is None:
+                return None
+
+            return {"tags": tags_caption, "nl": nl_caption}
+
         def load_dreambooth_dir(subset: DreamBoothSubset):
             if not os.path.isdir(subset.image_dir):
                 logger.warning(f"not directory: {subset.image_dir}")
@@ -2030,6 +2025,12 @@ class DreamBoothDataset(BaseDataset):
 
             info_cache_file = os.path.join(subset.image_dir, self.IMAGE_INFO_CACHE_FILE)
             use_cached_info_for_subset = subset.cache_info
+            if subset.caption_mode == "mixed" and use_cached_info_for_subset:
+                logger.warning(
+                    "caption_mode=mixed does not support cached image info yet, so cache_info is disabled for this subset"
+                    + f" / caption_mode=mixedは現在image info cacheに未対応のため、このサブセットではcache_infoを無効化します: {subset.image_dir}"
+                )
+                use_cached_info_for_subset = False
             if use_cached_info_for_subset:
                 logger.info(
                     f"using cached image info for this subset / このサブセットで、キャッシュされた画像情報を使います: {info_cache_file}"
@@ -2120,7 +2121,15 @@ class DreamBoothDataset(BaseDataset):
                 captions = []
                 missing_captions = []
                 for img_path in tqdm(img_paths, desc="read caption"):
-                    cap_for_img = read_caption(img_path, subset.caption_extension, subset.enable_wildcard)
+                    cap_for_img = read_caption(img_path, subset.caption_extension, subset.enable_wildcard, subset.caption_mode)
+                    tag_caption = cap_for_img["tags"] if isinstance(cap_for_img, dict) else cap_for_img
+                    if tag_caption is None and subset.class_tokens is not None:
+                        if isinstance(cap_for_img, dict):
+                            cap_for_img["tags"] = subset.class_tokens
+                        else:
+                            cap_for_img = subset.class_tokens
+                        tag_caption = subset.class_tokens
+
                     if cap_for_img is None and subset.class_tokens is None:
                         logger.warning(
                             f"neither caption file nor class tokens are found. use empty caption for {img_path} / キャプションファイルもclass tokenも見つかりませんでした。空のキャプションを使用します: {img_path}"
