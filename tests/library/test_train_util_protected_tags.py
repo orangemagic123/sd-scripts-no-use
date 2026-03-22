@@ -28,14 +28,7 @@ from library import train_util
 from library.train_util import BaseDataset, BaseSubset
 
 
-def create_subset(
-    protected_tags_file=None,
-    caption_tag_dropout_rate=1.0,
-    shuffle_caption=True,
-    keep_tokens_separator="",
-    caption_mode="caption",
-    mixed_weights=None,
-):
+def create_subset(protected_tags_file=None, caption_tag_dropout_rate=1.0, shuffle_caption=True):
     return BaseSubset(
         image_dir=None,
         alpha_mask=False,
@@ -43,9 +36,7 @@ def create_subset(
         shuffle_caption=shuffle_caption,
         caption_separator=",",
         keep_tokens=0,
-        keep_tokens_separator=keep_tokens_separator,
-        caption_mode=caption_mode,
-        mixed_weights=mixed_weights,
+        keep_tokens_separator="",
         protected_tags_file=protected_tags_file,
         secondary_separator=None,
         enable_wildcard=False,
@@ -111,43 +102,3 @@ def test_maybe_log_train_captions_logs_caption_and_dropped_tags(caplog):
     assert "captions at step 100" in caplog.text
     assert "[0] sample.png caption: apple, banana, ... (+2 more)" in caplog.text
     assert "[0] sample.png dropped tags: cat, dog, ... (+1 more)" in caplog.text
-
-
-def test_mixed_caption_nl_tags_keeps_fixed_prefix_first():
-    dataset = BaseDataset(resolution=None, network_multiplier=1.0, debug_dataset=False)
-    subset = create_subset(
-        caption_tag_dropout_rate=0.0,
-        shuffle_caption=False,
-        keep_tokens_separator="|||",
-        caption_mode="mixed",
-        mixed_weights={"nl_tags": 1},
-    )
-
-    caption, caption_info = dataset.process_caption(
-        subset,
-        {"tags": "a, b ||| c, d", "nl": "natural language, with commas"},
-        return_info=True,
-    )
-
-    assert caption == "a, b ||| natural language, with commas, c, d"
-    assert caption_info["mixed_mode"] == "nl_tags"
-
-
-def test_mixed_caption_nl_is_not_affected_by_tag_dropout():
-    dataset = BaseDataset(resolution=None, network_multiplier=1.0, debug_dataset=False)
-    subset = create_subset(
-        caption_tag_dropout_rate=1.0,
-        shuffle_caption=False,
-        keep_tokens_separator="|||",
-        caption_mode="mixed",
-        mixed_weights={"nl": 1},
-    )
-
-    caption, caption_info = dataset.process_caption(
-        subset,
-        {"tags": "a, b ||| c, d", "nl": "natural language, with commas"},
-        return_info=True,
-    )
-
-    assert caption == "a, b ||| natural language, with commas"
-    assert caption_info["dropped_tags"] == ["c", "d"]

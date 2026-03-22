@@ -59,8 +59,6 @@ class BaseSubsetParams:
     caption_separator: str = (",",)
     keep_tokens: int = 0
     keep_tokens_separator: str = (None,)
-    caption_mode: str = "caption"
-    mixed_weights: Optional[Dict[str, float]] = None
     protected_tags_file: Optional[str] = None
     secondary_separator: Optional[str] = None
     enable_wildcard: bool = False
@@ -192,8 +190,6 @@ class ConfigSanitizer:
         "shuffle_caption": bool,
         "keep_tokens": int,
         "keep_tokens_separator": str,
-        "caption_mode": str,
-        "mixed_weights": dict,
         "protected_tags_file": str,
         "secondary_separator": str,
         "caption_separator": str,
@@ -556,7 +552,6 @@ def generate_dataset_group_by_blueprint(dataset_group_blueprint: DatasetGroupBlu
                     num_repeats: {subset.num_repeats}
                     shuffle_caption: {subset.shuffle_caption}
                     keep_tokens: {subset.keep_tokens}
-                    caption_mode: {subset.caption_mode}
                     protected_tags_file: {subset.protected_tags_file}
                     caption_dropout_rate: {subset.caption_dropout_rate}
                     caption_dropout_every_n_epochs: {subset.caption_dropout_every_n_epochs}

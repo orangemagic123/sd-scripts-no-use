@@ -436,8 +436,6 @@ class BaseSubset:
         caption_separator: str,
         keep_tokens: int,
         keep_tokens_separator: str,
-        caption_mode: str,
-        mixed_weights: Optional[Dict[str, float]],
         protected_tags_file: Optional[str],
         secondary_separator: Optional[str],
         enable_wildcard: bool,
@@ -464,8 +462,6 @@ class BaseSubset:
         self.caption_separator = caption_separator
         self.keep_tokens = keep_tokens
         self.keep_tokens_separator = keep_tokens_separator
-        self.caption_mode = caption_mode
-        self.mixed_weights = mixed_weights if mixed_weights is not None else {"tags": 1.0}
         self.protected_tags_file = protected_tags_file
         self.protected_tags = self.load_protected_tags(protected_tags_file)
         self.secondary_separator = secondary_separator
@@ -507,8 +503,6 @@ class DreamBoothSubset(BaseSubset):
         caption_separator: str,
         keep_tokens,
         keep_tokens_separator,
-        caption_mode,
-        mixed_weights,
         protected_tags_file,
         secondary_separator,
         enable_wildcard,
@@ -538,8 +532,6 @@ class DreamBoothSubset(BaseSubset):
             caption_separator,
             keep_tokens,
             keep_tokens_separator,
-            caption_mode,
-            mixed_weights,
             protected_tags_file,
             secondary_separator,
             enable_wildcard,
@@ -584,8 +576,6 @@ class FineTuningSubset(BaseSubset):
         caption_separator,
         keep_tokens,
         keep_tokens_separator,
-        caption_mode,
-        mixed_weights,
         protected_tags_file,
         secondary_separator,
         enable_wildcard,
@@ -615,8 +605,6 @@ class FineTuningSubset(BaseSubset):
             caption_separator,
             keep_tokens,
             keep_tokens_separator,
-            caption_mode,
-            mixed_weights,
             protected_tags_file,
             secondary_separator,
             enable_wildcard,
@@ -657,8 +645,6 @@ class ControlNetSubset(BaseSubset):
         caption_separator,
         keep_tokens,
         keep_tokens_separator,
-        caption_mode,
-        mixed_weights,
         protected_tags_file,
         secondary_separator,
         enable_wildcard,
@@ -688,8 +674,6 @@ class ControlNetSubset(BaseSubset):
             caption_separator,
             keep_tokens,
             keep_tokens_separator,
-            caption_mode,
-            mixed_weights,
             protected_tags_file,
             secondary_separator,
             enable_wildcard,
@@ -862,174 +846,19 @@ class BaseDataset(torch.utils.data.Dataset):
     def add_replacement(self, str_from, str_to):
         self.replacements[str_from] = str_to
 
-    def _prepare_caption_text(self, caption: Optional[str], enable_wildcard: bool) -> str:
-        caption = "" if caption is None else caption
-
-        if enable_wildcard:
-            if "\n" in caption:
-                caption = random.choice(caption.split("\n"))
-
-            replacer1 = "⦅"
-            replacer2 = "⦆"
-            while replacer1 in caption or replacer2 in caption:
-                replacer1 += "⦅"
-                replacer2 += "⦆"
-
-            caption = caption.replace("{{", replacer1).replace("}}", replacer2)
-
-            def replace_wildcard(match):
-                return random.choice(match.group(1).split("|"))
-
-            caption = re.sub(r"\{([^}]+)\}", replace_wildcard, caption)
-            caption = caption.replace(replacer1, "{").replace(replacer2, "}")
-        else:
-            caption = caption.split("\n")[0]
-
-        return caption
-
-    def _split_tag_caption_parts(self, subset: BaseSubset, caption: str):
-        fixed_tokens = []
-        flex_tokens = []
-        fixed_suffix_tokens = []
-
-        if hasattr(subset, "keep_tokens_separator") and subset.keep_tokens_separator and subset.keep_tokens_separator in caption:
-            fixed_part, flex_part = caption.split(subset.keep_tokens_separator, 1)
-            if subset.keep_tokens_separator in flex_part:
-                flex_part, fixed_suffix_part = flex_part.split(subset.keep_tokens_separator, 1)
-                fixed_suffix_tokens = [t.strip() for t in fixed_suffix_part.split(subset.caption_separator) if t.strip()]
-
-            fixed_tokens = [t.strip() for t in fixed_part.split(subset.caption_separator) if t.strip()]
-            flex_tokens = [t.strip() for t in flex_part.split(subset.caption_separator) if t.strip()]
-        else:
-            tokens = [t.strip() for t in caption.strip().split(subset.caption_separator)]
-            flex_tokens = tokens[:]
-            if subset.keep_tokens > 0:
-                fixed_tokens = flex_tokens[: subset.keep_tokens]
-                flex_tokens = tokens[subset.keep_tokens :]
-
-        return fixed_tokens, flex_tokens, fixed_suffix_tokens
-
-    def _process_tag_tokens(self, subset: BaseSubset, flex_tokens: List[str]):
-        if subset.token_warmup_step < 1:
-            subset.token_warmup_step = math.floor(subset.token_warmup_step * self.max_train_steps)
-        if subset.token_warmup_step and self.current_step < subset.token_warmup_step:
-            tokens_len = (
-                math.floor((self.current_step) * ((len(flex_tokens) - subset.token_warmup_min) / (subset.token_warmup_step)))
-                + subset.token_warmup_min
-            )
-            flex_tokens = flex_tokens[:tokens_len]
-
-        def dropout_tags(tokens):
-            if subset.caption_tag_dropout_rate <= 0:
-                return tokens, []
-            kept_tokens = []
-            dropped_tags = []
-            for token in tokens:
-                if token.strip().lower() in subset.protected_tags:
-                    kept_tokens.append(token)
-                elif random.random() >= subset.caption_tag_dropout_rate:
-                    kept_tokens.append(token)
-                else:
-                    dropped_tags.append(token)
-            return kept_tokens, dropped_tags
-
-        if subset.shuffle_caption:
-            random.shuffle(flex_tokens)
-
-        return dropout_tags(flex_tokens)
-
-    def _apply_replacements_to_caption(self, caption: str) -> str:
-        for str_from, str_to in self.replacements.items():
-            if str_from == "":
-                if type(str_to) == list:
-                    caption = random.choice(str_to)
-                else:
-                    caption = str_to
-            else:
-                caption = caption.replace(str_from, str_to)
-        return caption
-
-    def _join_mixed_caption_parts(self, subset: BaseSubset, fixed_tokens: List[str], body_parts: List[str]) -> str:
-        body_parts = [part.strip() for part in body_parts if part and part.strip()]
-        if fixed_tokens and subset.keep_tokens_separator:
-            fixed_part = ", ".join(fixed_tokens)
-            if body_parts:
-                return f"{fixed_part} {subset.keep_tokens_separator} " + ", ".join(body_parts)
-            return fixed_part
-        return ", ".join(fixed_tokens + body_parts)
-
-    def _build_mixed_caption(self, subset: BaseSubset, caption_data: Dict[str, Optional[str]], caption_info: Dict[str, Any]) -> str:
-        tag_caption = self._prepare_caption_text(caption_data.get("tags"), subset.enable_wildcard)
-        nl_caption = self._prepare_caption_text(caption_data.get("nl"), subset.enable_wildcard)
-
-        fixed_tokens, flex_tokens, fixed_suffix_tokens = self._split_tag_caption_parts(subset, tag_caption)
-        processed_flex_tokens, dropped_tags = self._process_tag_tokens(subset, flex_tokens)
-        caption_info["dropped_tags"] = dropped_tags
-
-        mixed_weights = subset.mixed_weights if subset.mixed_weights is not None else {"tags": 1.0}
-        available_modes = []
-        available_weights = []
-
-        has_tag_body = bool(processed_flex_tokens or fixed_suffix_tokens or fixed_tokens)
-        has_nl = bool(nl_caption)
-
-        for mode in ["tags", "nl", "tags_nl", "nl_tags"]:
-            weight = mixed_weights.get(mode, 0)
-            if weight <= 0:
-                continue
-            if mode == "tags" and has_tag_body:
-                available_modes.append(mode)
-                available_weights.append(weight)
-            elif mode == "nl" and has_nl:
-                available_modes.append(mode)
-                available_weights.append(weight)
-            elif mode == "tags_nl" and has_tag_body and has_nl:
-                available_modes.append(mode)
-                available_weights.append(weight)
-            elif mode == "nl_tags" and has_nl and has_tag_body:
-                available_modes.append(mode)
-                available_weights.append(weight)
-
-        if not available_modes:
-            if has_nl:
-                selected_mode = "nl"
-            else:
-                selected_mode = "tags"
-        else:
-            selected_mode = random.choices(available_modes, weights=available_weights, k=1)[0]
-
-        tag_body_parts = processed_flex_tokens + fixed_suffix_tokens
-        if selected_mode == "tags":
-            body_parts = tag_body_parts
-            log_segments = fixed_tokens + tag_body_parts
-        elif selected_mode == "nl":
-            body_parts = [nl_caption] if nl_caption else []
-            log_segments = fixed_tokens + body_parts
-        elif selected_mode == "tags_nl":
-            body_parts = tag_body_parts + ([nl_caption] if nl_caption else [])
-            log_segments = fixed_tokens + tag_body_parts + ([nl_caption] if nl_caption else [])
-        else:
-            body_parts = ([nl_caption] if nl_caption else []) + tag_body_parts
-            log_segments = fixed_tokens + ([nl_caption] if nl_caption else []) + tag_body_parts
-
-        caption_info["log_segments"] = [segment for segment in log_segments if segment]
-        caption_info["mixed_mode"] = selected_mode
-
-        caption = self._join_mixed_caption_parts(subset, fixed_tokens, body_parts)
-        if subset.secondary_separator:
-            caption = caption.replace(subset.secondary_separator, subset.caption_separator)
-
-        caption = self._apply_replacements_to_caption(caption)
-        return caption
-
     def process_caption(self, subset: BaseSubset, caption, return_info: bool = False):
         caption_info = {
             "original_caption": caption,
             "processed_caption": caption,
             "dropped_tags": [],
             "is_caption_dropout": False,
-            "log_segments": [],
         }
+
+        # caption に prefix/suffix を付ける
+        if subset.caption_prefix:
+            caption = subset.caption_prefix + " " + caption
+        if subset.caption_suffix:
+            caption = caption + " " + subset.caption_suffix
 
         # dropoutの決定：tag dropがこのメソッド内にあるのでここで行うのが良い
         is_drop_out = subset.caption_dropout_rate > 0 and random.random() < subset.caption_dropout_rate
@@ -1046,25 +875,81 @@ class BaseDataset(torch.utils.data.Dataset):
             if isinstance(caption, dict) and subset.caption_mode == "mixed":
                 caption = self._build_mixed_caption(subset, caption, caption_info)
             else:
-                if subset.caption_prefix:
-                    caption = subset.caption_prefix + " " + caption
-                if subset.caption_suffix:
-                    caption = caption + " " + subset.caption_suffix
+                # if caption is multiline, use the first line
+                caption = caption.split("\n")[0]
 
-                caption = self._prepare_caption_text(caption, subset.enable_wildcard)
+            if subset.shuffle_caption or subset.token_warmup_step > 0 or subset.caption_tag_dropout_rate > 0:
+                fixed_tokens = []
+                flex_tokens = []
+                fixed_suffix_tokens = []
+                if (
+                    hasattr(subset, "keep_tokens_separator")
+                    and subset.keep_tokens_separator
+                    and subset.keep_tokens_separator in caption
+                ):
+                    fixed_part, flex_part = caption.split(subset.keep_tokens_separator, 1)
+                    if subset.keep_tokens_separator in flex_part:
+                        flex_part, fixed_suffix_part = flex_part.split(subset.keep_tokens_separator, 1)
+                        fixed_suffix_tokens = [t.strip() for t in fixed_suffix_part.split(subset.caption_separator) if t.strip()]
 
-                if subset.shuffle_caption or subset.token_warmup_step > 0 or subset.caption_tag_dropout_rate > 0:
-                    fixed_tokens, flex_tokens, fixed_suffix_tokens = self._split_tag_caption_parts(subset, caption)
-                    flex_tokens, caption_info["dropped_tags"] = self._process_tag_tokens(subset, flex_tokens)
-                    caption = ", ".join(fixed_tokens + flex_tokens + fixed_suffix_tokens)
-                    caption_info["log_segments"] = fixed_tokens + flex_tokens + fixed_suffix_tokens
+                    fixed_tokens = [t.strip() for t in fixed_part.split(subset.caption_separator) if t.strip()]
+                    flex_tokens = [t.strip() for t in flex_part.split(subset.caption_separator) if t.strip()]
+                else:
+                    tokens = [t.strip() for t in caption.strip().split(subset.caption_separator)]
+                    flex_tokens = tokens[:]
+                    if subset.keep_tokens > 0:
+                        fixed_tokens = flex_tokens[: subset.keep_tokens]
+                        flex_tokens = tokens[subset.keep_tokens :]
+
+                if subset.token_warmup_step < 1:  # 初回に上書きする
+                    subset.token_warmup_step = math.floor(subset.token_warmup_step * self.max_train_steps)
+                if subset.token_warmup_step and self.current_step < subset.token_warmup_step:
+                    tokens_len = (
+                        math.floor(
+                            (self.current_step) * ((len(flex_tokens) - subset.token_warmup_min) / (subset.token_warmup_step))
+                        )
+                        + subset.token_warmup_min
+                    )
+                    flex_tokens = flex_tokens[:tokens_len]
+
+                def dropout_tags(tokens):
+                    if subset.caption_tag_dropout_rate <= 0:
+                        return tokens, []
+                    l = []
+                    dropped_tags = []
+                    for token in tokens:
+                        if token.strip().lower() in subset.protected_tags:
+                            l.append(token)
+                        elif random.random() >= subset.caption_tag_dropout_rate:
+                            l.append(token)
+                        else:
+                            dropped_tags.append(token)
+                    return l, dropped_tags
+
+                if subset.shuffle_caption:
+                    random.shuffle(flex_tokens)
+
+                flex_tokens, caption_info["dropped_tags"] = dropout_tags(flex_tokens)
+
+                caption = ", ".join(fixed_tokens + flex_tokens + fixed_suffix_tokens)
+
+            # process secondary separator
+            if subset.secondary_separator:
+                caption = caption.replace(subset.secondary_separator, subset.caption_separator)
+
+            # textual inversion対応
+            for str_from, str_to in self.replacements.items():
+                if str_from == "":
+                    # replace all
+                    if type(str_to) == list:
+                        caption = random.choice(str_to)
+                    else:
+                        caption = str_to
                 else:
                     caption_info["log_segments"] = [tag.strip() for tag in caption.split(subset.caption_separator) if tag.strip()]
 
                 if subset.secondary_separator:
                     caption = caption.replace(subset.secondary_separator, subset.caption_separator)
-
-                caption = self._apply_replacements_to_caption(caption)
 
         caption_info["processed_caption"] = caption
 
@@ -1891,7 +1776,6 @@ class BaseDataset(torch.utils.data.Dataset):
                     "processed_caption": caption,
                     "dropped_tags": [],
                     "is_caption_dropout": False,
-                    "log_segments": _split_caption_tags_for_logging(caption) if isinstance(caption, str) else [],
                 }
 
             input_ids_list.append(input_ids)
@@ -2586,8 +2470,6 @@ class ControlNetDataset(BaseDataset):
                 subset.caption_separator,
                 subset.keep_tokens,
                 subset.keep_tokens_separator,
-                subset.caption_mode,
-                subset.mixed_weights,
                 subset.protected_tags_file,
                 subset.secondary_separator,
                 subset.enable_wildcard,
@@ -4704,19 +4586,6 @@ def add_dataset_arguments(
         default="",
         help="A custom separator to divide the caption into fixed and flexible parts. Tokens before this separator will not be shuffled. If not specified, '--keep_tokens' will be used to determine the fixed number of tokens."
         + " / captionを固定部分と可変部分に分けるためのカスタム区切り文字。この区切り文字より前のトークンはシャッフルされない。指定しない場合、'--keep_tokens'が固定部分のトークン数として使用される。",
-    )
-    parser.add_argument(
-        "--caption_mode",
-        type=str,
-        default="caption",
-        choices=["caption", "mixed"],
-        help="caption input mode. 'caption' uses the normal caption file only, 'mixed' combines tag and natural language captions / captionの入力モード。'caption' は通常のcaptionファイルのみ、'mixed' はタグcaptionと自然言語captionを組み合わせる",
-    )
-    parser.add_argument(
-        "--mixed_weights",
-        type=json.loads,
-        default=None,
-        help='weights for mixed caption modes as JSON, e.g. \'{"tags":50,"nl":10,"tags_nl":20,"nl_tags":20}\' / mixed captionの各モードの重みをJSONで指定する',
     )
     parser.add_argument(
         "--protected_tags_file",
@@ -6948,7 +6817,7 @@ def maybe_log_train_captions(args: argparse.Namespace, batch: Dict[str, Any], gl
         if caption_info.get("is_caption_dropout"):
             logger.info(f"{prefix} caption: (caption dropout)")
         else:
-            caption_tags = caption_info.get("log_segments") or _split_caption_tags_for_logging(caption_info.get("processed_caption", caption))
+            caption_tags = _split_caption_tags_for_logging(caption_info.get("processed_caption", caption))
             logger.info(f"{prefix} caption: {_truncate_caption_tags(caption_tags, max_length)}")
 
         dropped_tags = caption_info.get("dropped_tags", [])
