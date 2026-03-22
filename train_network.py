@@ -554,6 +554,9 @@ class NetworkTrainer:
 
             blueprint = blueprint_generator.generate(user_config, args)
             train_dataset_group, val_dataset_group = config_util.generate_dataset_group_by_blueprint(blueprint.dataset_group)
+            config_util.apply_top_level_dataset_fallbacks(user_config, args, train_dataset_group)
+            if val_dataset_group is not None:
+                config_util.apply_top_level_dataset_fallbacks(user_config, args, val_dataset_group)
         else:
             # use arbitrary dataset class
             train_dataset_group = train_util.load_arbitrary_dataset(args)
@@ -593,6 +596,9 @@ class NetworkTrainer:
         logger.info("preparing accelerator")
         accelerator = train_util.prepare_accelerator(args)
         is_main_process = accelerator.is_main_process
+        train_util.maybe_log_dataset_caption_config_mismatch(args, train_dataset_group, "train", is_main_process)
+        if val_dataset_group is not None:
+            train_util.maybe_log_dataset_caption_config_mismatch(args, val_dataset_group, "validation", is_main_process)
 
         # mixed precisionに対応した型を用意しておき適宜castする
         weight_dtype, save_dtype = train_util.prepare_dtype(args)
@@ -1282,9 +1288,9 @@ class NetworkTrainer:
         val_step_loss_recorder = train_util.LossRecorder()
         val_epoch_loss_recorder = train_util.LossRecorder()
 
-        del train_dataset_group
-        if val_dataset_group is not None:
-            del val_dataset_group
+        # Keep dataset groups alive for epoch-start protected-tag logging below.
+        # Deleting them here breaks train_util.log_protected_tags_epoch_start(...)
+        # with UnboundLocalError before the first training step.
 
         # callback for step start
         if hasattr(accelerator.unwrap_model(network), "on_step_start"):
@@ -1401,6 +1407,7 @@ class NetworkTrainer:
         for epoch in range(epoch_to_start, num_train_epochs):
             accelerator.print(f"\nepoch {epoch+1}/{num_train_epochs}\n")
             current_epoch.value = epoch + 1
+            train_util.log_protected_tags_epoch_start(train_dataset_group, epoch + 1, accelerator.is_main_process)
 
             metadata["ss_epoch"] = str(epoch + 1)
 
@@ -1486,6 +1493,7 @@ class NetworkTrainer:
                 if accelerator.sync_gradients:
                     progress_bar.update(1)
                     global_step += 1
+                    train_util.maybe_log_train_captions(args, batch, global_step, accelerator.is_main_process)
 
                     optimizer_eval_fn()
                     self.sample_images(

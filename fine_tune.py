@@ -93,6 +93,9 @@ def train(args):
 
         blueprint = blueprint_generator.generate(user_config, args)
         train_dataset_group, val_dataset_group = config_util.generate_dataset_group_by_blueprint(blueprint.dataset_group)
+        config_util.apply_top_level_dataset_fallbacks(user_config, args, train_dataset_group)
+        if val_dataset_group is not None:
+            config_util.apply_top_level_dataset_fallbacks(user_config, args, val_dataset_group)
     else:
         train_dataset_group = train_util.load_arbitrary_dataset(args)
         val_dataset_group = None
@@ -121,6 +124,9 @@ def train(args):
     # acceleratorを準備する
     logger.info("prepare accelerator")
     accelerator = train_util.prepare_accelerator(args)
+    train_util.maybe_log_dataset_caption_config_mismatch(args, train_dataset_group, "train", accelerator.is_main_process)
+    if val_dataset_group is not None:
+        train_util.maybe_log_dataset_caption_config_mismatch(args, val_dataset_group, "validation", accelerator.is_main_process)
 
     # mixed precisionに対応した型を用意しておき適宜castする
     weight_dtype, save_dtype = train_util.prepare_dtype(args)
@@ -349,6 +355,7 @@ def train(args):
     for epoch in range(num_train_epochs):
         accelerator.print(f"\nepoch {epoch+1}/{num_train_epochs}")
         current_epoch.value = epoch + 1
+        train_util.log_protected_tags_epoch_start(train_dataset_group, epoch + 1, accelerator.is_main_process)
 
         for m in training_models:
             m.train()
@@ -426,6 +433,7 @@ def train(args):
             if accelerator.sync_gradients:
                 progress_bar.update(1)
                 global_step += 1
+                train_util.maybe_log_train_captions(args, batch, global_step, accelerator.is_main_process)
 
                 train_util.sample_images(
                     accelerator, args, None, global_step, accelerator.device, vae, tokenize_strategy.tokenizer, text_encoder, unet

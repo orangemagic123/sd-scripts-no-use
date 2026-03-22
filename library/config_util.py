@@ -59,6 +59,9 @@ class BaseSubsetParams:
     caption_separator: str = (",",)
     keep_tokens: int = 0
     keep_tokens_separator: str = (None,)
+    caption_mode: str = "caption"
+    mixed_weights: Optional[Dict[str, float]] = None
+    protected_tags_file: Optional[str] = None
     secondary_separator: Optional[str] = None
     enable_wildcard: bool = False
     color_aug: bool = False
@@ -189,6 +192,9 @@ class ConfigSanitizer:
         "shuffle_caption": bool,
         "keep_tokens": int,
         "keep_tokens_separator": str,
+        "caption_mode": str,
+        "mixed_weights": dict,
+        "protected_tags_file": str,
         "secondary_separator": str,
         "caption_separator": str,
         "enable_wildcard": bool,
@@ -550,6 +556,9 @@ def generate_dataset_group_by_blueprint(dataset_group_blueprint: DatasetGroupBlu
                     num_repeats: {subset.num_repeats}
                     shuffle_caption: {subset.shuffle_caption}
                     keep_tokens: {subset.keep_tokens}
+                    caption_mode: {subset.caption_mode}
+                    mixed_weights: {getattr(subset, "mixed_weights", None)}
+                    protected_tags_file: {subset.protected_tags_file}
                     caption_dropout_rate: {subset.caption_dropout_rate}
                     caption_dropout_every_n_epochs: {subset.caption_dropout_every_n_epochs}
                     caption_tag_dropout_rate: {subset.caption_tag_dropout_rate}
@@ -602,6 +611,27 @@ def generate_dataset_group_by_blueprint(dataset_group_blueprint: DatasetGroupBlu
         DatasetGroup(datasets),
         DatasetGroup(val_datasets) if val_datasets else None
     )
+
+
+def apply_top_level_dataset_fallbacks(user_config: dict, argparse_namespace: argparse.Namespace, dataset_group: DatasetGroup):
+    if not user_config or dataset_group is None:
+        return
+
+    requested_mixed_weights = getattr(argparse_namespace, "mixed_weights", None)
+    if requested_mixed_weights is None:
+        return
+
+    general_config = user_config.get("general", {})
+    dataset_configs = user_config.get("datasets", [])
+
+    for dataset, dataset_config in zip(getattr(dataset_group, "datasets", []), dataset_configs):
+        dataset_has_mixed_weights = "mixed_weights" in dataset_config
+        for subset, subset_config in zip(getattr(dataset, "subsets", []), dataset_config.get("subsets", [])):
+            subset_has_mixed_weights = "mixed_weights" in subset_config
+            if subset_has_mixed_weights or dataset_has_mixed_weights or "mixed_weights" in general_config:
+                continue
+
+            subset.mixed_weights = dict(requested_mixed_weights)
 
 
 def generate_dreambooth_subsets_config_by_subdirs(train_data_dir: Optional[str] = None, reg_data_dir: Optional[str] = None):
