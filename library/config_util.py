@@ -613,6 +613,27 @@ def generate_dataset_group_by_blueprint(dataset_group_blueprint: DatasetGroupBlu
     )
 
 
+def apply_top_level_dataset_fallbacks(user_config: dict, argparse_namespace: argparse.Namespace, dataset_group: DatasetGroup):
+    if not user_config or dataset_group is None:
+        return
+
+    requested_mixed_weights = getattr(argparse_namespace, "mixed_weights", None)
+    if requested_mixed_weights is None:
+        return
+
+    general_config = user_config.get("general", {})
+    dataset_configs = user_config.get("datasets", [])
+
+    for dataset, dataset_config in zip(getattr(dataset_group, "datasets", []), dataset_configs):
+        dataset_has_mixed_weights = "mixed_weights" in dataset_config
+        for subset, subset_config in zip(getattr(dataset, "subsets", []), dataset_config.get("subsets", [])):
+            subset_has_mixed_weights = "mixed_weights" in subset_config
+            if subset_has_mixed_weights or dataset_has_mixed_weights or "mixed_weights" in general_config:
+                continue
+
+            subset.mixed_weights = dict(requested_mixed_weights)
+
+
 def generate_dreambooth_subsets_config_by_subdirs(train_data_dir: Optional[str] = None, reg_data_dir: Optional[str] = None):
     def extract_dreambooth_params(name: str) -> Tuple[int, str]:
         tokens = name.split("_")

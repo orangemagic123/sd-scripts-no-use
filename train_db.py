@@ -91,6 +91,9 @@ def train(args):
 
         blueprint = blueprint_generator.generate(user_config, args)
         train_dataset_group, val_dataset_group = config_util.generate_dataset_group_by_blueprint(blueprint.dataset_group)
+        config_util.apply_top_level_dataset_fallbacks(user_config, args, train_dataset_group)
+        if val_dataset_group is not None:
+            config_util.apply_top_level_dataset_fallbacks(user_config, args, val_dataset_group)
     else:
         train_dataset_group = train_util.load_arbitrary_dataset(args)
         val_dataset_group = None
@@ -129,6 +132,9 @@ def train(args):
         )
 
     accelerator = train_util.prepare_accelerator(args)
+    train_util.maybe_log_dataset_caption_config_mismatch(args, train_dataset_group, "train", accelerator.is_main_process)
+    if val_dataset_group is not None:
+        train_util.maybe_log_dataset_caption_config_mismatch(args, val_dataset_group, "validation", accelerator.is_main_process)
 
     # mixed precisionに対応した型を用意しておき適宜castする
     weight_dtype, save_dtype = train_util.prepare_dtype(args)

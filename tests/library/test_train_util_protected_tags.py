@@ -26,7 +26,7 @@ if "cv2" not in sys.modules:
     sys.modules["cv2"] = cv2_stub
 
 from library import train_util
-from library.config_util import BlueprintGenerator, ConfigSanitizer
+from library.config_util import BlueprintGenerator, ConfigSanitizer, apply_top_level_dataset_fallbacks
 from library.train_util import BaseDataset, BaseSubset
 
 
@@ -211,6 +211,34 @@ def test_dataset_config_mixed_weights_override_top_level_args_only_when_explicit
     )
     subset_with_override = blueprint_with_dataset_override.dataset_group.datasets[0].subsets[0].params
     assert subset_with_override.mixed_weights == {"tags": 50, "nl": 10, "tags_nl": 20, "nl_tags": 20}
+
+
+def test_apply_top_level_dataset_fallbacks_sets_mixed_weights_only_when_dataset_config_omits_it():
+    args = argparse.Namespace(mixed_weights={"tags": 25, "nl": 25, "tags_nl": 25, "nl_tags": 25})
+    subset = create_subset(caption_mode="mixed")
+    subset.mixed_weights = {"tags": 50.0, "nl": 10.0, "tags_nl": 20.0, "nl_tags": 20.0}
+    dataset_group = types.SimpleNamespace(datasets=[types.SimpleNamespace(subsets=[subset])])
+
+    apply_top_level_dataset_fallbacks(
+        {"general": {"caption_mode": "mixed"}, "datasets": [{"subsets": [{"image_dir": "./img"}]}]},
+        args,
+        dataset_group,
+    )
+    assert subset.mixed_weights == {"tags": 25, "nl": 25, "tags_nl": 25, "nl_tags": 25}
+
+    subset.mixed_weights = {"tags": 50.0, "nl": 10.0, "tags_nl": 20.0, "nl_tags": 20.0}
+    apply_top_level_dataset_fallbacks(
+        {
+            "general": {
+                "caption_mode": "mixed",
+                "mixed_weights": {"tags": 50, "nl": 10, "tags_nl": 20, "nl_tags": 20},
+            },
+            "datasets": [{"subsets": [{"image_dir": "./img"}]}],
+        },
+        args,
+        dataset_group,
+    )
+    assert subset.mixed_weights == {"tags": 50.0, "nl": 10.0, "tags_nl": 20.0, "nl_tags": 20.0}
 
 
 def test_mixed_caption_nl_tags_keeps_fixed_prefix_first():
