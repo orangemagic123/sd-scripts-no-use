@@ -557,6 +557,7 @@ def generate_dataset_group_by_blueprint(dataset_group_blueprint: DatasetGroupBlu
                     shuffle_caption: {subset.shuffle_caption}
                     keep_tokens: {subset.keep_tokens}
                     caption_mode: {subset.caption_mode}
+                    mixed_weights: {getattr(subset, "mixed_weights", None)}
                     protected_tags_file: {subset.protected_tags_file}
                     caption_dropout_rate: {subset.caption_dropout_rate}
                     caption_dropout_every_n_epochs: {subset.caption_dropout_every_n_epochs}

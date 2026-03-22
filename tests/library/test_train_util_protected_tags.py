@@ -199,3 +199,28 @@ def test_mixed_caption_equal_weights_can_select_all_modes():
         selected_modes.add(caption_info["mixed_mode"])
 
     assert selected_modes == {"tags", "nl", "tags_nl", "nl_tags"}
+
+
+def test_mixed_caption_uses_documented_default_weights_when_not_specified():
+    dataset = BaseDataset(resolution=None, network_multiplier=1.0, debug_dataset=False)
+    subset = create_subset(
+        caption_tag_dropout_rate=0.0,
+        shuffle_caption=False,
+        keep_tokens_separator="|||",
+        caption_mode="mixed",
+        mixed_weights=None,
+    )
+
+    assert subset.mixed_weights == {"tags": 50.0, "nl": 10.0, "tags_nl": 20.0, "nl_tags": 20.0}
+
+    random.seed(12345)
+    selected_modes = set()
+    for _ in range(200):
+        _, caption_info = dataset.process_caption(
+            subset,
+            {"tags": "a, b ||| c, d", "nl": "natural language"},
+            return_info=True,
+        )
+        selected_modes.add(caption_info["mixed_mode"])
+
+    assert selected_modes == {"tags", "nl", "tags_nl", "nl_tags"}

@@ -411,6 +411,7 @@ class AugHelper:
 
 
 class BaseSubset:
+    DEFAULT_MIXED_WEIGHTS = {"tags": 50.0, "nl": 10.0, "tags_nl": 20.0, "nl_tags": 20.0}
     caption_mode = "caption"
     mixed_weights = None
     protected_tags_file = None
@@ -470,7 +471,7 @@ class BaseSubset:
         self.keep_tokens = keep_tokens
         self.keep_tokens_separator = keep_tokens_separator
         self.caption_mode = caption_mode
-        self.mixed_weights = mixed_weights if mixed_weights is not None else {"tags": 1.0}
+        self.mixed_weights = mixed_weights if mixed_weights is not None else dict(self.DEFAULT_MIXED_WEIGHTS)
         self.protected_tags_file = protected_tags_file
         self.protected_tags = self.load_protected_tags(protected_tags_file)
         self.secondary_separator = secondary_separator
@@ -971,7 +972,11 @@ class BaseDataset(torch.utils.data.Dataset):
         processed_flex_tokens, dropped_tags = self._process_tag_tokens(subset, flex_tokens)
         caption_info["dropped_tags"] = dropped_tags
 
-        mixed_weights = getattr(subset, "mixed_weights", None) if getattr(subset, "mixed_weights", None) is not None else {"tags": 1.0}
+        mixed_weights = (
+            getattr(subset, "mixed_weights", None)
+            if getattr(subset, "mixed_weights", None) is not None
+            else dict(BaseSubset.DEFAULT_MIXED_WEIGHTS)
+        )
         available_modes = []
         available_weights = []
 
