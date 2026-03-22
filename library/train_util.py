@@ -4993,9 +4993,11 @@ def read_config_from_file(args: argparse.Namespace, parser: argparse.ArgumentPar
 
     # combine all sections into one
     ignore_nesting_dict = {}
+    parser_destinations = {action.dest for action in parser._actions}
     for section_name, section_dict in config_dict.items():
-        # if value is not dict, save key and value as is
-        if not isinstance(section_dict, dict):
+        # keep real top-level arguments as-is, even when their value is a dict
+        # (e.g. mixed_weights = { ... } in a training config file)
+        if not isinstance(section_dict, dict) or section_name in parser_destinations:
             ignore_nesting_dict[section_name] = section_dict
             continue
 
