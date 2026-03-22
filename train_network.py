@@ -1282,9 +1282,9 @@ class NetworkTrainer:
         val_step_loss_recorder = train_util.LossRecorder()
         val_epoch_loss_recorder = train_util.LossRecorder()
 
-        del train_dataset_group
-        if val_dataset_group is not None:
-            del val_dataset_group
+        # Keep dataset groups alive for epoch-start protected-tag logging below.
+        # Deleting them here breaks train_util.log_protected_tags_epoch_start(...)
+        # with UnboundLocalError before the first training step.
 
         # callback for step start
         if hasattr(accelerator.unwrap_model(network), "on_step_start"):
