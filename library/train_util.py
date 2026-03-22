@@ -6990,6 +6990,30 @@ def maybe_log_train_captions(args: argparse.Namespace, batch: Dict[str, Any], gl
             logger.info(f"{prefix} dropped tags: {_truncate_caption_tags(dropped_tags, max_length)}")
 
 
+def maybe_log_dataset_caption_config_mismatch(
+    args: argparse.Namespace, dataset_group, dataset_group_name: str = "train", is_main_process: bool = True
+):
+    if not is_main_process:
+        return
+    if getattr(args, "dataset_config", None) is None:
+        return
+
+    requested_mixed_weights = getattr(args, "mixed_weights", None)
+    if requested_mixed_weights is None:
+        return
+
+    for dataset_index, dataset in enumerate(getattr(dataset_group, "datasets", [])):
+        for subset_index, subset in enumerate(getattr(dataset, "subsets", [])):
+            effective_mixed_weights = getattr(subset, "mixed_weights", None)
+            if effective_mixed_weights != requested_mixed_weights:
+                logger.warning(
+                    f"{dataset_group_name} dataset mixed_weights for dataset {dataset_index} subset {subset_index} "
+                    + f"does not match top-level args. effective={effective_mixed_weights}, requested={requested_mixed_weights}. "
+                    + "When using --dataset_config, subset/dataset/general values explicitly set in the dataset config take precedence over the top-level training config. "
+                    + "If you want a specific mixed_weights value, set it in the dataset_config as well."
+                )
+
+
 def log_protected_tags_epoch_start(dataset_group, epoch: int, is_main_process: bool = True):
     if not is_main_process:
         return

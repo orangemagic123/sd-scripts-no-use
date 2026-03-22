@@ -26,6 +26,7 @@ if "cv2" not in sys.modules:
     sys.modules["cv2"] = cv2_stub
 
 from library import train_util
+from library.config_util import BlueprintGenerator, ConfigSanitizer
 from library.train_util import BaseDataset, BaseSubset
 
 
@@ -62,6 +63,49 @@ def create_subset(
         token_warmup_min=1,
         token_warmup_step=0,
     )
+
+
+def create_blueprint_args(**overrides):
+    defaults = dict(
+        train_batch_size=4,
+        resolution=(1024, 1024),
+        enable_bucket=True,
+        min_bucket_reso=256,
+        max_bucket_reso=2048,
+        bucket_no_upscale=True,
+        bucket_reso_steps=64,
+        network_multiplier=1.0,
+        caption_mode="mixed",
+        mixed_weights={"tags": 25, "nl": 25, "tags_nl": 25, "nl_tags": 25},
+        protected_tags_file="./protected_tags.txt",
+        keep_tokens_separator="|||",
+        secondary_separator=";;;",
+        shuffle_caption=False,
+        keep_tokens=0,
+        caption_dropout_rate=0.05,
+        caption_dropout_every_n_epochs=0,
+        caption_tag_dropout_rate=0.1,
+        caption_prefix=None,
+        caption_suffix=None,
+        token_warmup_min=1,
+        token_warmup_step=0,
+        color_aug=False,
+        flip_aug=False,
+        face_crop_aug_range=None,
+        random_crop=False,
+        caption_separator=",",
+        enable_wildcard=False,
+        validation_seed=None,
+        validation_split=0.0,
+        resize_interpolation=None,
+        alpha_mask=False,
+        debug_dataset=False,
+        max_token_length=None,
+        prior_loss_weight=1.0,
+        dataset_repeats=1,
+    )
+    defaults.update(overrides)
+    return argparse.Namespace(**defaults)
 
 
 def test_protected_tags_are_not_dropped_but_are_still_shuffled(tmp_path):
@@ -126,6 +170,47 @@ def test_log_protected_tags_epoch_start_logs_loaded_tags(caplog):
 
     assert "protected tags at epoch 1" in caplog.text
     assert "[Dataset 0 / Subset 0] 2 tags from ./protected_tags.txt" in caplog.text
+
+
+def test_log_dataset_caption_config_mismatch_warns_when_dataset_config_overrides_args(caplog):
+    args = argparse.Namespace(
+        dataset_config="./dataset_config.toml",
+        mixed_weights={"tags": 25, "nl": 25, "tags_nl": 25, "nl_tags": 25},
+    )
+    subset = create_subset(caption_mode="mixed")
+    subset.mixed_weights = {"tags": 50.0, "nl": 10.0, "tags_nl": 20.0, "nl_tags": 20.0}
+    dataset_group = types.SimpleNamespace(datasets=[types.SimpleNamespace(subsets=[subset])])
+
+    with caplog.at_level("WARNING"):
+        train_util.maybe_log_dataset_caption_config_mismatch(args, dataset_group)
+
+    assert "does not match top-level args" in caplog.text
+    assert "set it in the dataset_config as well" in caplog.text
+
+
+def test_dataset_config_mixed_weights_override_top_level_args_only_when_explicitly_set():
+    args = create_blueprint_args()
+    sanitizer = ConfigSanitizer(True, True, False, True)
+
+    blueprint_without_dataset_override = BlueprintGenerator(sanitizer).generate(
+        {"general": {"caption_mode": "mixed"}, "datasets": [{"subsets": [{"image_dir": "./img"}]}]},
+        args,
+    )
+    subset_without_override = blueprint_without_dataset_override.dataset_group.datasets[0].subsets[0].params
+    assert subset_without_override.mixed_weights == {"tags": 25, "nl": 25, "tags_nl": 25, "nl_tags": 25}
+
+    blueprint_with_dataset_override = BlueprintGenerator(sanitizer).generate(
+        {
+            "general": {
+                "caption_mode": "mixed",
+                "mixed_weights": {"tags": 50, "nl": 10, "tags_nl": 20, "nl_tags": 20},
+            },
+            "datasets": [{"subsets": [{"image_dir": "./img"}]}],
+        },
+        args,
+    )
+    subset_with_override = blueprint_with_dataset_override.dataset_group.datasets[0].subsets[0].params
+    assert subset_with_override.mixed_weights == {"tags": 50, "nl": 10, "tags_nl": 20, "nl_tags": 20}
 
 
 def test_mixed_caption_nl_tags_keeps_fixed_prefix_first():
