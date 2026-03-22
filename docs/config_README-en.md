@@ -147,6 +147,8 @@ These options are related to subset configuration.
 | `caption_suffix` | `", from side"` | o | o | o |
 | `caption_separator` |  (not specified) | o | o | o |
 | `keep_tokens_separator` | `“|||”` | o | o | o |
+| `caption_mode` | `"mixed"` | o | o | o |
+| `mixed_weights` | `{ tags = 50, nl = 10, tags_nl = 20, nl_tags = 20 }` | o | o | o |
 | `protected_tags_file` | `"./protected_tags.txt"` | o | o | o |
 | `secondary_separator` | `“;;;”` | o | o | o |
 | `enable_wildcard` | `true` | o | o | o |
@@ -160,6 +162,10 @@ These options are related to subset configuration.
     * Specifies the string to separate the tags. The default is `,`. This option is usually not necessary to set.
 * `keep_tokens_separator`
     * Specifies the string to separate the parts to be fixed in the caption. For example, if you specify `aaa, bbb ||| ccc, ddd, eee, fff ||| ggg, hhh`, the parts `aaa, bbb` and `ggg, hhh` will remain, and the rest will be shuffled and dropped. The comma in between is not necessary. As a result, the prompt will be `aaa, bbb, eee, ccc, fff, ggg, hhh` or `aaa, bbb, fff, ccc, eee, ggg, hhh`, etc.
+* `caption_mode`
+    * `caption` uses the normal caption file only. `mixed` uses the normal caption file as the tag caption and also loads a companion natural-language caption file with `_nl` added before the extension, such as `image.txt` + `image_nl.txt`.
+* `mixed_weights`
+    * Used when `caption_mode = "mixed"`. It chooses between `tags`, `nl`, `tags_nl`, and `nl_tags` using the specified weights. The natural-language part is not affected by tag dropout, and tags before `keep_tokens_separator` always stay at the beginning.
 * `protected_tags_file`
     * Specifies a text file containing one tag per line. Tags in this file are protected from `caption_tag_dropout_rate`, but they are still included in caption shuffling. Matching is case-insensitive.
 * `secondary_separator`
