@@ -1401,6 +1401,7 @@ class NetworkTrainer:
         for epoch in range(epoch_to_start, num_train_epochs):
             accelerator.print(f"\nepoch {epoch+1}/{num_train_epochs}\n")
             current_epoch.value = epoch + 1
+            train_util.log_protected_tags_epoch_start(train_dataset_group, epoch + 1, accelerator.is_main_process)
 
             metadata["ss_epoch"] = str(epoch + 1)
 

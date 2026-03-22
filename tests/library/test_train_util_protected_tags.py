@@ -1,4 +1,5 @@
 import argparse
+import random
 import sys
 import types
 from importlib.machinery import ModuleSpec
@@ -101,6 +102,7 @@ def test_maybe_log_train_captions_logs_caption_and_dropped_tags(caplog):
                 "dropped_tags": ["cat", "dog", "bird"],
                 "is_caption_dropout": False,
                 "image_key": "sample.png",
+                "mixed_mode": "nl",
             }
         ],
     }
@@ -109,8 +111,21 @@ def test_maybe_log_train_captions_logs_caption_and_dropped_tags(caplog):
         train_util.maybe_log_train_captions(args, batch, 100)
 
     assert "captions at step 100" in caplog.text
-    assert "[0] sample.png caption: apple, banana, ... (+2 more)" in caplog.text
+    assert "[0] sample.png caption [nl]: apple, banana, ... (+2 more)" in caplog.text
     assert "[0] sample.png dropped tags: cat, dog, ... (+1 more)" in caplog.text
+
+
+def test_log_protected_tags_epoch_start_logs_loaded_tags(caplog):
+    subset = create_subset()
+    subset.protected_tags_file = "./protected_tags.txt"
+    subset.protected_tags = {"apple", "banana"}
+    dataset_group = types.SimpleNamespace(datasets=[types.SimpleNamespace(subsets=[subset])])
+
+    with caplog.at_level("INFO"):
+        train_util.log_protected_tags_epoch_start(dataset_group, 1)
+
+    assert "protected tags at epoch 1" in caplog.text
+    assert "[Dataset 0 / Subset 0] 2 tags from ./protected_tags.txt" in caplog.text
 
 
 def test_mixed_caption_nl_tags_keeps_fixed_prefix_first():
@@ -161,3 +176,26 @@ def test_subset_has_backward_compatible_defaults_for_new_caption_attributes():
 
     assert subset.caption_mode == "caption"
     assert subset.mixed_weights is None
+
+
+def test_mixed_caption_equal_weights_can_select_all_modes():
+    dataset = BaseDataset(resolution=None, network_multiplier=1.0, debug_dataset=False)
+    subset = create_subset(
+        caption_tag_dropout_rate=0.0,
+        shuffle_caption=False,
+        keep_tokens_separator="|||",
+        caption_mode="mixed",
+        mixed_weights={"tags": 25, "nl": 25, "tags_nl": 25, "nl_tags": 25},
+    )
+
+    random.seed(12345)
+    selected_modes = set()
+    for _ in range(200):
+        _, caption_info = dataset.process_caption(
+            subset,
+            {"tags": "a, b ||| c, d", "nl": "natural language"},
+            return_info=True,
+        )
+        selected_modes.add(caption_info["mixed_mode"])
+
+    assert selected_modes == {"tags", "nl", "tags_nl", "nl_tags"}

@@ -415,6 +415,7 @@ def train(args):
     for epoch in range(num_train_epochs):
         accelerator.print(f"\nepoch {epoch+1}/{num_train_epochs}")
         current_epoch.value = epoch + 1
+        train_util.log_protected_tags_epoch_start(train_dataset_group, epoch + 1, accelerator.is_main_process)
 
         for step, batch in enumerate(train_dataloader):
             current_step.value = global_step

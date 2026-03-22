@@ -2243,10 +2243,17 @@ class DreamBoothDataset(BaseDataset):
                 # 画像ファイルごとにプロンプトを読み込み、もしあればそちらを使う
                 captions = []
                 missing_captions = []
+                missing_nl_captions = []
+                found_nl_captions = 0
                 for img_path in tqdm(img_paths, desc="read caption"):
                     cap_for_img = read_caption(
                         img_path, subset.caption_extension, subset.enable_wildcard, getattr(subset, "caption_mode", "caption")
                     )
+                    if isinstance(cap_for_img, dict):
+                        if cap_for_img.get("nl"):
+                            found_nl_captions += 1
+                        else:
+                            missing_nl_captions.append(img_path)
                     tag_caption = cap_for_img["tags"] if isinstance(cap_for_img, dict) else cap_for_img
                     if tag_caption is None and subset.class_tokens is not None:
                         if isinstance(cap_for_img, dict):
@@ -2267,6 +2274,17 @@ class DreamBoothDataset(BaseDataset):
                             missing_captions.append(img_path)
                         else:
                             captions.append(cap_for_img)
+
+                if getattr(subset, "caption_mode", "caption") == "mixed":
+                    logger.info(
+                        f"found natural language caption files for {found_nl_captions}/{len(img_paths)} images"
+                        + f" / 自然言語captionファイルを {found_nl_captions}/{len(img_paths)} 枚の画像で見つけました"
+                    )
+                    if missing_nl_captions:
+                        logger.warning(
+                            f"natural language caption file is missing for {len(missing_nl_captions)} images"
+                            + f" / 自然言語captionファイルが {len(missing_nl_captions)} 枚の画像で見つかりませんでした"
+                        )
 
             self.set_tag_frequency(os.path.basename(subset.image_dir), captions)  # タグ頻度を記録
 
@@ -6953,13 +6971,44 @@ def maybe_log_train_captions(args: argparse.Namespace, batch: Dict[str, Any], gl
         prefix = f"  [{i}]"
         if image_key:
             prefix += f" {image_key}"
+        mixed_mode = caption_info.get("mixed_mode")
+        caption_label = "caption" if mixed_mode is None else f"caption [{mixed_mode}]"
 
         if caption_info.get("is_caption_dropout"):
-            logger.info(f"{prefix} caption: (caption dropout)")
+            logger.info(f"{prefix} {caption_label}: (caption dropout)")
         else:
             caption_tags = caption_info.get("log_segments") or _split_caption_tags_for_logging(caption_info.get("processed_caption", caption))
-            logger.info(f"{prefix} caption: {_truncate_caption_tags(caption_tags, max_length)}")
+            logger.info(f"{prefix} {caption_label}: {_truncate_caption_tags(caption_tags, max_length)}")
 
         dropped_tags = caption_info.get("dropped_tags", [])
         if dropped_tags:
             logger.info(f"{prefix} dropped tags: {_truncate_caption_tags(dropped_tags, max_length)}")
+
+
+def log_protected_tags_epoch_start(dataset_group, epoch: int, is_main_process: bool = True):
+    if not is_main_process:
+        return
+
+    dataset_summaries = []
+    for dataset_index, dataset in enumerate(getattr(dataset_group, "datasets", [])):
+        for subset_index, subset in enumerate(getattr(dataset, "subsets", [])):
+            protected_tags = sorted(getattr(subset, "protected_tags", set()) or [])
+            protected_tags_file = getattr(subset, "protected_tags_file", None)
+            if protected_tags:
+                dataset_summaries.append(
+                    f"[Dataset {dataset_index} / Subset {subset_index}] {len(protected_tags)} tags"
+                    + (f" from {protected_tags_file}" if protected_tags_file else "")
+                    + f": {_truncate_caption_tags(protected_tags, 10)}"
+                )
+            elif protected_tags_file:
+                dataset_summaries.append(
+                    f"[Dataset {dataset_index} / Subset {subset_index}] 0 tags loaded from {protected_tags_file}"
+                )
+
+    if not dataset_summaries:
+        logger.info(f"protected tags at epoch {epoch} / epoch {epoch}時点のprotected tags: none")
+        return
+
+    logger.info(f"protected tags at epoch {epoch} / epoch {epoch}時点のprotected tags:")
+    for summary in dataset_summaries:
+        logger.info(f"  {summary}")
