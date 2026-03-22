@@ -477,6 +477,7 @@ def train(args):
     for epoch in range(num_train_epochs):
         accelerator.print(f"\nepoch {epoch+1}/{num_train_epochs}")
         current_epoch.value = epoch + 1
+        train_util.log_protected_tags_epoch_start(train_dataset_group, epoch + 1, accelerator.is_main_process)
 
         for m in training_models:
             m.train()
@@ -603,6 +604,7 @@ def train(args):
             if accelerator.sync_gradients:
                 progress_bar.update(1)
                 global_step += 1
+                train_util.maybe_log_train_captions(args, batch, global_step, accelerator.is_main_process)
 
                 optimizer_eval_fn()
                 anima_train_utils.sample_images(
