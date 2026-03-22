@@ -3,6 +3,7 @@ import random
 import sys
 import types
 from importlib.machinery import ModuleSpec
+from pathlib import Path
 from unittest.mock import patch
 
 if "torchvision" not in sys.modules:
@@ -239,6 +240,14 @@ def test_apply_top_level_dataset_fallbacks_sets_mixed_weights_only_when_dataset_
         dataset_group,
     )
     assert subset.mixed_weights == {"tags": 50.0, "nl": 10.0, "tags_nl": 20.0, "nl_tags": 20.0}
+
+
+def test_training_scripts_prepare_accelerator_before_mixed_weight_mismatch_logging():
+    for script_path in ["train_network.py", "train_db.py", "fine_tune.py"]:
+        script = Path(script_path).read_text(encoding="utf-8")
+        assert "prepare_accelerator(args)" in script
+        assert "maybe_log_dataset_caption_config_mismatch" in script
+        assert script.index("prepare_accelerator(args)") < script.index("maybe_log_dataset_caption_config_mismatch")
 
 
 def test_mixed_caption_nl_tags_keeps_fixed_prefix_first():
