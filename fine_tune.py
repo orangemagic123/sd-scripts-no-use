@@ -426,6 +426,7 @@ def train(args):
             if accelerator.sync_gradients:
                 progress_bar.update(1)
                 global_step += 1
+                train_util.maybe_log_train_captions(args, batch, global_step, accelerator.is_main_process)
 
                 train_util.sample_images(
                     accelerator, args, None, global_step, accelerator.device, vae, tokenize_strategy.tokenizer, text_encoder, unet
