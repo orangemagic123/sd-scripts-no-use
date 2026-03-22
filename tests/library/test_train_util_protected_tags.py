@@ -245,9 +245,21 @@ def test_apply_top_level_dataset_fallbacks_sets_mixed_weights_only_when_dataset_
 def test_training_scripts_prepare_accelerator_before_mixed_weight_mismatch_logging():
     for script_path in ["train_network.py", "train_db.py", "fine_tune.py"]:
         script = Path(script_path).read_text(encoding="utf-8")
-        assert "prepare_accelerator(args)" in script
-        assert "maybe_log_dataset_caption_config_mismatch" in script
-        assert script.index("prepare_accelerator(args)") < script.index("maybe_log_dataset_caption_config_mismatch")
+        prepare_index = script.index("prepare_accelerator(args)")
+        assert prepare_index >= 0
+
+        mismatch_log_indices = []
+        search_start = 0
+        needle = 'maybe_log_dataset_caption_config_mismatch(args, train_dataset_group, "train",'
+        while True:
+            mismatch_log_index = script.find(needle, search_start)
+            if mismatch_log_index == -1:
+                break
+            mismatch_log_indices.append(mismatch_log_index)
+            search_start = mismatch_log_index + 1
+
+        assert mismatch_log_indices
+        assert min(mismatch_log_indices) > prepare_index
 
 
 def test_mixed_caption_nl_tags_keeps_fixed_prefix_first():
