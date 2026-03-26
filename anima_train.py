@@ -2,6 +2,7 @@
 
 import argparse
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 import copy
 import gc
 import math
@@ -40,6 +41,33 @@ from library.config_util import (
 from library.custom_train_functions import apply_masked_loss, add_custom_train_arguments
 
 
+class NetworkEMA:
+    def __init__(self, parameters, decay: float):
+        self.decay = decay
+        self.shadow_params = [param.detach().clone() for param in parameters]
+        self.collected_params = None
+
+    def update(self, parameters):
+        for shadow_param, param in zip(self.shadow_params, parameters):
+            shadow_param.lerp_(param.detach(), 1.0 - self.decay)
+
+    def store(self, parameters):
+        self.collected_params = [param.detach().clone() for param in parameters]
+
+    def copy_to(self, parameters):
+        for shadow_param, param in zip(self.shadow_params, parameters):
+            param.data.copy_(shadow_param.data)
+
+    def restore(self, parameters):
+        if self.collected_params is None:
+            return
+
+        for stored_param, param in zip(self.collected_params, parameters):
+            param.data.copy_(stored_param.data)
+
+        self.collected_params = None
+
+
 def train(args):
     train_util.verify_training_args(args)
     train_util.prepare_dataset_args(args, True)
@@ -71,6 +99,9 @@ def train(args):
     assert (
         args.blocks_to_swap is None or args.blocks_to_swap == 0
     ) or not args.unsloth_offload_checkpointing, "blocks_to_swap is not supported with unsloth_offload_checkpointing"
+
+    if args.ema_decay is not None and not 0.0 < args.ema_decay < 1.0:
+        raise ValueError("ema_decay must be between 0 and 1 / ema_decayは0より大きく1未満である必要があります")
 
     cache_latents = args.cache_latents
     use_dreambooth_method = args.in_json is None
@@ -386,6 +417,25 @@ def train(args):
     # resume
     train_util.resume_from_local_or_hf_if_specified(accelerator, args)
 
+    ema_model = None
+    if train_dit and args.ema_decay is not None:
+        ema_model = NetworkEMA(list(accelerator.unwrap_model(dit).parameters()), args.ema_decay)
+        logger.info(f"enable EMA for DiT weights with decay={args.ema_decay}")
+
+    @contextmanager
+    def apply_ema_weights(unwrapped_model):
+        if ema_model is None:
+            yield unwrapped_model
+            return
+
+        params = list(unwrapped_model.parameters())
+        ema_model.store(params)
+        ema_model.copy_to(params)
+        try:
+            yield unwrapped_model
+        finally:
+            ema_model.restore(params)
+
     if args.fused_backward_pass:
         # use fused optimizer for backward pass: other optimizers will be supported in the future
         import library.adafactor_fused
@@ -606,6 +656,9 @@ def train(args):
                     # optimizer.step() and optimizer.zero_grad() are called in the optimizer hook
                     lr_scheduler.step()
 
+                if ema_model is not None:
+                    ema_model.update(list(accelerator.unwrap_model(dit).parameters()))
+
             # Checks if the accelerator has performed an optimization step
             if accelerator.sync_gradients:
                 progress_bar.update(1)
@@ -613,33 +666,35 @@ def train(args):
                 train_util.maybe_log_train_captions(args, batch, global_step, accelerator.is_main_process)
 
                 optimizer_eval_fn()
-                anima_train_utils.sample_images(
-                    accelerator,
-                    args,
-                    None,
-                    global_step,
-                    dit,
-                    vae,
-                    qwen3_text_encoder,
-                    tokenize_strategy,
-                    text_encoding_strategy,
-                    sample_prompts_te_outputs,
-                )
+                with apply_ema_weights(accelerator.unwrap_model(dit)):
+                    anima_train_utils.sample_images(
+                        accelerator,
+                        args,
+                        None,
+                        global_step,
+                        dit,
+                        vae,
+                        qwen3_text_encoder,
+                        tokenize_strategy,
+                        text_encoding_strategy,
+                        sample_prompts_te_outputs,
+                    )
 
                 # Save at specific steps
                 if args.save_every_n_steps is not None and global_step % args.save_every_n_steps == 0:
                     accelerator.wait_for_everyone()
                     if accelerator.is_main_process:
-                        anima_train_utils.save_anima_model_on_epoch_end_or_stepwise(
-                            args,
-                            False,
-                            accelerator,
-                            save_dtype,
-                            epoch,
-                            num_train_epochs,
-                            global_step,
-                            accelerator.unwrap_model(dit) if train_dit else None,
-                        )
+                        with apply_ema_weights(accelerator.unwrap_model(dit)):
+                            anima_train_utils.save_anima_model_on_epoch_end_or_stepwise(
+                                args,
+                                False,
+                                accelerator,
+                                save_dtype,
+                                epoch,
+                                num_train_epochs,
+                                global_step,
+                                accelerator.unwrap_model(dit) if train_dit else None,
+                            )
                 optimizer_train_fn()
 
             current_loss = loss.detach().item()
@@ -670,29 +725,31 @@ def train(args):
         optimizer_eval_fn()
         if args.save_every_n_epochs is not None:
             if accelerator.is_main_process:
-                anima_train_utils.save_anima_model_on_epoch_end_or_stepwise(
-                    args,
-                    True,
-                    accelerator,
-                    save_dtype,
-                    epoch,
-                    num_train_epochs,
-                    global_step,
-                    accelerator.unwrap_model(dit) if train_dit else None,
-                )
+                with apply_ema_weights(accelerator.unwrap_model(dit)):
+                    anima_train_utils.save_anima_model_on_epoch_end_or_stepwise(
+                        args,
+                        True,
+                        accelerator,
+                        save_dtype,
+                        epoch,
+                        num_train_epochs,
+                        global_step,
+                        accelerator.unwrap_model(dit) if train_dit else None,
+                    )
 
-        anima_train_utils.sample_images(
-            accelerator,
-            args,
-            epoch + 1,
-            global_step,
-            dit,
-            vae,
-            qwen3_text_encoder,
-            tokenize_strategy,
-            text_encoding_strategy,
-            sample_prompts_te_outputs,
-        )
+        with apply_ema_weights(accelerator.unwrap_model(dit)):
+            anima_train_utils.sample_images(
+                accelerator,
+                args,
+                epoch + 1,
+                global_step,
+                dit,
+                vae,
+                qwen3_text_encoder,
+                tokenize_strategy,
+                text_encoding_strategy,
+                sample_prompts_te_outputs,
+            )
 
     # End training
     is_main_process = accelerator.is_main_process
@@ -707,13 +764,14 @@ def train(args):
     del accelerator
 
     if is_main_process and train_dit:
-        anima_train_utils.save_anima_model_on_train_end(
-            args,
-            save_dtype,
-            epoch,
-            global_step,
-            dit,
-        )
+        with apply_ema_weights(dit):
+            anima_train_utils.save_anima_model_on_train_end(
+                args,
+                save_dtype,
+                epoch,
+                global_step,
+                dit,
+            )
         logger.info("model saved.")
 
 
@@ -734,6 +792,12 @@ def setup_parser() -> argparse.ArgumentParser:
     anima_train_utils.add_anima_training_arguments(parser)
     sai_model_spec.add_model_spec_arguments(parser)
 
+    parser.add_argument(
+        "--ema_decay",
+        type=float,
+        default=None,
+        help="Enable EMA for DiT weights with the specified decay (for example 0.999) / 指定した減衰率（例: 0.999）でDiT重みにEMAを使用する",
+    )
     parser.add_argument(
         "--cpu_offload_checkpointing",
         action="store_true",
